@@ -41,3 +41,14 @@ ten.
 
 In both cases, a bigger data structure named `deals` is created as a `tuple` with
 each element representing one dealt hand of ten cards.
+
+If you choose to run the simulation multiple times and sum the results, a separate
+process is forked for each run, and the data are summed at the end.
+
+## What does it evaluate?
+Gin players often wonder what the probability is that they get a hand with no triplets,
+or no runs, or all four cards of one rank, and various combinations of these factors of 
+chance that affect one's probability of winning before any information is exchanged during
+play. Most of the combinatorics are hard to directly calculate because they involve
+studying the large numbers of permutations of hands. This program uses a Monte Carlo 
+simulation.
