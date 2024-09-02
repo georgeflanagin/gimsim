@@ -23,6 +23,12 @@ import random
 import time
 
 ###
+# Globals.
+###
+myargs = argparse.Namespace()
+deals = tuple()
+
+###
 # Credits
 ###
 __author__ = 'George Flanagin'
@@ -35,6 +41,10 @@ __status__ = 'in progress'
 __license__ = 'MIT'
 
 class Card:
+    ###
+    # Not a lot of overhead here because the use of __slots__ 
+    # creates a class with no dict element.
+    ###
     __slots__ = ('rank', 'suit')
 
     def __init__(self, rank:int, suit:str) -> None:
@@ -44,9 +54,12 @@ class Card:
     def __str__(self) -> str:
         return f"({self.rank}, {self.suit})"
 
+###
+# Stray global.
+###
 deck = tuple(Card(rank, suit) for rank in tuple(range(1,14)) for suit in 'SHDC')
 
-def triplet_fraction(deals:tuple) -> int:
+def triplet_fraction() -> int:
 
     triplets = 0
     for deal in deals:
@@ -58,10 +71,17 @@ def triplet_fraction(deals:tuple) -> int:
 
 
 def ginsim_main(myargs:argparse.Namespace) -> int:
-    global deck
+    global deck, deals
 
     start = time.time()
-    deals = tuple(random.sample(deck, 10) for i in range(myargs.size))
+    if myargs.independent:
+        deals = tuple(random.sample(deck, 10) for i in range(myargs.size + 1))
+    else:
+        pairs = tuple(random.sample(deck, 20) for i in range((myargs.size + 1)/2))
+        lefts = tuple(pair[:10] for pair in pairs)
+        rights = tuple(pair[10:] for pair in pairs)
+        deals = lefts + rights
+            
     print(f"{myargs.size} hands in {time.time()-start} seconds.")
 
     print(triplet_fraction(deals))
@@ -73,6 +93,13 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(prog="ginsim", 
         description="What ginsim does, ginsim does best.")
+
+
+    parser.add_argument('-i', '--independent', action='store_true',
+        help="Assume (falsely) that the two players' hands are indepentent of each other.")
+
+    parser.add_argument('-n', '--num-evals', type=int, default=1,
+        help="Number of times to run the simulation.")
 
     parser.add_argument('-o', '--output', type=str, default="",
         help="Output file name")
