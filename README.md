@@ -11,7 +11,7 @@ rank, or runs to 3 to 10 cards of the same suit.
 ## How do you run it?
 
 ```bash
-usage: ginsim [-h] [-i] [-n NUM_EVALS] [-o OUTPUT] [-z SIZE]
+usage: ginsim [-h] [-i] [-n {1,24}] [-o OUTPUT] [-s SATURATION] [-z SIZE]
 
 What ginsim does, ginsim does best.
 
@@ -19,10 +19,12 @@ options:
   -h, --help            show this help message and exit
   -i, --independent     Assume (falsely) that the two players' hands are
                         indepentent of each other.
-  -n NUM_EVALS, --num-evals NUM_EVALS
+  -n {1,24}, --num-evals {1,24}
                         Number of times to run the simulation.
   -o OUTPUT, --output OUTPUT
                         Output file name
+  -s SATURATION, --saturation SATURATION
+                        Fraction of the available cores to use. Default is 1.0
   -z SIZE, --size SIZE  Number of hands to deal.
 ```
 
