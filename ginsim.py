@@ -19,14 +19,18 @@ if sys.version_info < min_py:
 import argparse
 from   collections import Counter
 import contextlib
+import fcntl
 import random
+import tempfile
 import time
 
 ###
 # Globals.
 ###
-myargs = argparse.Namespace()
 deals = tuple()
+myargs = argparse.Namespace()
+num_cores = len(os.sched_getaffinity(0))
+result_file = None
 
 ###
 # Credits
@@ -59,32 +63,112 @@ class Card:
 ###
 deck = tuple(Card(rank, suit) for rank in tuple(range(1,14)) for suit in 'SHDC')
 
-def triplet_fraction() -> int:
+
+def run_sim(n:int) -> None:
+    """
+    Run a simulation n times.
+    """
+    global myargs
+    
+    for i in range(n):
+        if myargs.independent:
+            deals = tuple(random.sample(deck, 10) for i in range(myargs.size + 1))
+        else:
+            pairs = tuple(random.sample(deck, 20) for i in range((myargs.size + 1)/2))
+            lefts = tuple(pair[:10] for pair in pairs)
+            rights = tuple(pair[10:] for pair in pairs)
+            deals = lefts + rights
+                
+        triplet_fraction()
+
+
+def splitter(group:Iterable, num_chunks:int) -> Iterable:
+    """
+    Generator to divide a collection into num_chunks pieces.
+    It works with str, tuple, list, and dict, and the return
+    value is of the same type as the first argument.
+
+    group      -- str, tuple, list, or dict.
+    num_chunks -- how many pieces you want to have.
+
+    Use:
+        for chunk in splitter(group, num_chunks):
+            ... do something with chunk ...
+
+    """
+
+    quotient, remainder = divmod(len(group), num_chunks)
+    is_dict = isinstance(group, dict)
+    if is_dict: 
+        group = tuple(kvpair for kvpair in group.items())
+
+    for i in range(num_chunks):
+        lower = i*quotient + min(i, remainder)
+        upper = (i+1)*quotient + min(i+1, remainder)
+
+        if is_dict:
+            yield {k:v for (k,v) in group[lower:upper]}
+        else:
+            yield group[lower:upper]
+
+
+def triplet_fraction() -> None:
+
+    global deals, result_file
 
     triplets = 0
     for deal in deals:
         ranks = Counter(card.rank for card in deal)
         if any(_ > 2 for _ in ranks.values()): triplets += 1
 
-    return (triplets, len(deals)-triplets)
+        write_results(f"triplet,{triplets},{len(deals)-triplets}\n")
 
+
+def write_results(s:str) -> None:
+    """
+    Write one line of a CSV file to be used for later analysis,
+    perhaps in pandas.
+    """
+
+    global results_file
+
+    try:
+        fcntl.lockf(results_file, fcntl.LOCK_EX)
+        results_file.write(s)
+    finally:
+        fcntl.lockf(results_file, fcntl.LOCK_UN)
 
 
 def ginsim_main(myargs:argparse.Namespace) -> int:
     global deck, deals
 
-    start = time.time()
-    if myargs.independent:
-        deals = tuple(random.sample(deck, 10) for i in range(myargs.size + 1))
-    else:
-        pairs = tuple(random.sample(deck, 20) for i in range((myargs.size + 1)/2))
-        lefts = tuple(pair[:10] for pair in pairs)
-        rights = tuple(pair[10:] for pair in pairs)
-        deals = lefts + rights
-            
-    print(f"{myargs.size} hands in {time.time()-start} seconds.")
+    
+    result_file = tempfile.NamedTemporaryFile('w+')
 
-    print(triplet_fraction(deals))
+    ###
+    # Work out the multiprocessing parameters.
+    ###
+    num_processes = min(myargs.num_evals, num_cores*myargs.saturation)
+    pids = set()
+    
+    # Cut the work into suitable size pieces, and let the kids 
+    # go to work.
+    for chunk in splitter(tuple(range(num_evals)), num_processes):
+        pid = os.fork()
+        if pid: 
+            pids.add(pid)
+            continue
+
+        else:
+            try:
+                run_sim(len(chunk))
+            finally:
+                os._exit(os.EX_OK)
+            
+    while pids:
+        pid, status, resources = os.wait3(0)
+        pids.remove(pid)
+        sys.write.stderr(f"Child {pid} finished.")
 
     return os.EX_OK
 
@@ -99,10 +183,14 @@ if __name__ == '__main__':
         help="Assume (falsely) that the two players' hands are indepentent of each other.")
 
     parser.add_argument('-n', '--num-evals', type=int, default=1,
+        choices=(1, num_cores),
         help="Number of times to run the simulation.")
 
     parser.add_argument('-o', '--output', type=str, default="",
         help="Output file name")
+
+    parser.add_argument('-s', '--saturation', type=float, default=1.0,
+        help="Fraction of the available cores to use. Default is 1.0")
 
     parser.add_argument('-z', '--size', type=int, default=100000,
         help="Number of hands to deal.")
