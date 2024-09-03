@@ -28,7 +28,6 @@ import time
 # Globals.
 ###
 deals = tuple()
-myargs = argparse.Namespace()
 num_cores = len(os.sched_getaffinity(0))
 result_file = None
 
@@ -67,22 +66,59 @@ class OuterLoop(Exception):
 ###
 deck = tuple(Card(rank, suit) for rank in tuple(range(1,14)) for suit in 'SHDC')
 
+def hasrun() -> None:
+
+    global deals
+    runs = 0
+
+    for deal in deals:
+        try:
+            deal_dict = defaultdict(set)
+
+            # group the cards by suit, and keep the ranks
+            # of the cards in a set.
+            for card in deal:
+                deal_dict[card.suit].add(card.rank)
+            
+            for k, v in deal_dict.items():
+                if len(v) < 3: continue
+                for i in v:
+                    if (i+1) in v and (i+2) in v:
+                        runs += 1
+                        raise OuterLoop
+
+        except OuterLoop:
+            continue
+        
+        write_results(f"runs,{runs},{len(deals)-runs}")
+        
+
+def pidprint(s:str) -> None:
+    global myargs
+    myargs.verbose and print(f"{os.getpid()} -> {s}")
+
 
 def run_sim(n:int) -> None:
     """
     Run a simulation n times.
     """
     global myargs
+
+    pidprint(f"Running {n} simulations.")
     
     for i in range(n):
+        start=time.time()
         if myargs.independent:
             deals = tuple(random.sample(deck, 10) for i in range(myargs.size + 1))
         else:
             pairs = tuple(random.sample(deck, 20) for i in range((myargs.size + 1)/2))
+            pidprint(f"{len(pairs)=}")
             lefts = tuple(pair[:10] for pair in pairs)
             rights = tuple(pair[10:] for pair in pairs)
             deals = lefts + rights
                 
+        pidprint(f"Dealt {myargs.size} hands in {time.time()-start} seconds.")
+
         triplet_fraction()
 
 
@@ -116,43 +152,19 @@ def splitter(group:Iterable, num_chunks:int) -> Iterable:
             yield group[lower:upper]
 
 
-def run() -> None:
-
-    global deals
-    runs = 0
-
-    for deal in deals:
-        try:
-            deal_dict = defaultdict(set)
-
-            # group the cards by suit, and keep the ranks
-            # of the cards in a set.
-            for card in deal:
-                deal_dict[card.suit].add(card.rank)
-            
-            for k, v in deal_dict.items():
-                if len(v) < 3: continue
-                for i in v:
-                    if (i+1) in v and (i+2) in v:
-                        runs += 1
-                        raise OuterLoop
-
-        except OuterLoop:
-            continue
-        
-        write_results(f"runs,{runs},{len(deals)-runs}")
-        
-
 def triplet_fraction() -> None:
 
     global deals, result_file
 
+    start=time.time()
     triplets = 0
     for deal in deals:
         ranks = Counter(card.rank for card in deal)
         if any(_ > 2 for _ in ranks.values()): triplets += 1
 
-        write_results(f"triplet,{triplets},{len(deals)-triplets}\n")
+    pidprint(f"Found {triplets} triplets in {time.time()-start} seconds.")
+    
+    write_results(f"triplet,{triplets},{len(deals)-triplets}\n")
 
 
 def write_results(s:str) -> None:
@@ -171,7 +183,8 @@ def write_results(s:str) -> None:
 
 
 def ginsim_main(myargs:argparse.Namespace) -> int:
-    global deck, deals
+
+    global deck, deals, num_cores
 
     
     result_file = tempfile.NamedTemporaryFile('w+')
@@ -180,6 +193,7 @@ def ginsim_main(myargs:argparse.Namespace) -> int:
     # Work out the multiprocessing parameters.
     ###
     num_processes = min(myargs.num_evals, num_cores*myargs.saturation)
+    pidprint(f"{num_processes=} {num_cores=}")
     pids = set()
     
     # Cut the work into suitable size pieces, and let the kids 
@@ -200,6 +214,9 @@ def ginsim_main(myargs:argparse.Namespace) -> int:
         pid, status, resources = os.wait3(0)
         pids.remove(pid)
         sys.stderr.write(f"Child {pid} finished.")
+
+    result_file.seek(0)
+    print(result_file.readlines())
 
     return os.EX_OK
 
@@ -222,6 +239,9 @@ if __name__ == '__main__':
 
     parser.add_argument('-s', '--saturation', type=float, default=1.0,
         help="Fraction of the available cores to use. Default is 1.0")
+
+    parser.add_argument('-v', '--verbose', action='store_true',
+        help="Print a running narrative.")
 
     parser.add_argument('-z', '--size', type=int, default=100000,
         help="Number of hands to deal.")
