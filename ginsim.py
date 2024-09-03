@@ -184,7 +184,7 @@ def ginsim_main(myargs:argparse.Namespace) -> int:
     
     # Cut the work into suitable size pieces, and let the kids 
     # go to work.
-    for chunk in splitter(tuple(range(num_evals)), num_processes):
+    for chunk in splitter(tuple(range(myargs.num_evals)), num_processes):
         pid = os.fork()
         if pid: 
             pids.add(pid)
@@ -199,7 +199,7 @@ def ginsim_main(myargs:argparse.Namespace) -> int:
     while pids:
         pid, status, resources = os.wait3(0)
         pids.remove(pid)
-        sys.write.stderr(f"Child {pid} finished.")
+        sys.stderr.write(f"Child {pid} finished.")
 
     return os.EX_OK
 
