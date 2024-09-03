@@ -17,7 +17,7 @@ if sys.version_info < min_py:
 # Other standard distro imports
 ###
 import argparse
-from   collections import Counter
+from   collections import Counter, defaultdict
 import contextlib
 import fcntl
 import random
@@ -57,6 +57,10 @@ class Card:
 
     def __str__(self) -> str:
         return f"({self.rank}, {self.suit})"
+
+class OuterLoop(Exception): 
+    pass
+
 
 ###
 # Stray global.
@@ -111,6 +115,33 @@ def splitter(group:Iterable, num_chunks:int) -> Iterable:
         else:
             yield group[lower:upper]
 
+
+def run() -> None:
+
+    global deals
+    runs = 0
+
+    for deal in deals:
+        try:
+            deal_dict = defaultdict(set)
+
+            # group the cards by suit, and keep the ranks
+            # of the cards in a set.
+            for card in deal:
+                deal_dict[card.suit].add(card.rank)
+            
+            for k, v in deal_dict.items():
+                if len(v) < 3: continue
+                for i in v:
+                    if (i+1) in v and (i+2) in v:
+                        runs += 1
+                        raise OuterLoop
+
+        except OuterLoop:
+            continue
+        
+        write_results(f"runs,{runs},{len(deals)-runs}")
+        
 
 def triplet_fraction() -> None:
 
