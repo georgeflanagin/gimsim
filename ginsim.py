@@ -20,9 +20,18 @@ import argparse
 from   collections import Counter, defaultdict
 import contextlib
 import fcntl
+import logging
 import random
 import tempfile
 import time
+
+###
+# from hpclib
+###
+import urlogger
+from   urlogger import URLogger
+
+from   urdecorators import trap
 
 ###
 # Globals.
@@ -43,83 +52,86 @@ __email__ = ['gflanagin@richmond.edu', 'me@georgeflanagin.com']
 __status__ = 'in progress'
 __license__ = 'MIT'
 
-class Card:
-    ###
-    # Not a lot of overhead here because the use of __slots__ 
-    # creates a class with no dict element.
-    ###
-    __slots__ = ('rank', 'suit')
-
-    def __init__(self, rank:int, suit:str) -> None:
-        self.rank = rank
-        self.suit = suit
-
-    def __str__(self) -> str:
-        return f"({self.rank}, {self.suit})"
-
-class OuterLoop(Exception): 
-    pass
-
-
 ###
-# Stray global.
+# DECK and SUITS are capitalized to draw attention
+# to the fact that they are constant globals.
 ###
-deck = tuple(Card(rank, suit) for rank in tuple(range(1,14)) for suit in 'SHDC')
+SUITS = 'CDHS'
+DECK = tuple(range(52))
+CARDS_PER_SUIT = len(DECK)//len(SUITS)
 
-def hasrun() -> None:
-
-    global deals
-    runs = 0
-
-    for deal in deals:
-        try:
-            deal_dict = defaultdict(set)
-
-            # group the cards by suit, and keep the ranks
-            # of the cards in a set.
-            for card in deal:
-                deal_dict[card.suit].add(card.rank)
-            
-            for k, v in deal_dict.items():
-                if len(v) < 3: continue
-                for i in v:
-                    if (i+1) in v and (i+2) in v:
-                        runs += 1
-                        raise OuterLoop
-
-        except OuterLoop:
-            continue
-        
-        write_results(f"runs,{runs},{len(deals)-runs}")
-        
-
-def pidprint(s:str) -> None:
-    global myargs
-    myargs.verbose and print(f"{os.getpid()} -> {s}")
+def a_deal() -> list:
+    """
+    deal 20 cards, and return them as two disjoint sets of 10.
+    """
+    _ = random.sample(range(52), 20)
+    return _[:10], _[10:]
 
 
+def bucketize(cards:Iterable, size:int) -> dict:
+    """
+    Efficiently group cards of the same rank.
+    """
+    buckets = defaultdict(list)
+    for card in cards:
+        idx = card // size
+        buckets[idx].append(card)
+
+    return buckets
+
+
+def card_to_int(card:tuple) -> int:
+    """
+    This is the inverse function of int_to_card. Must be
+    for testing, because I cannot find a use for it.
+    """
+    return card[0]*len(SUITS) + SUITS.find(card[1])
+
+
+def int_to_card(i:int) -> tuple:
+    """
+    Mainly for debugging, this converts an ordinal into a card name
+    that can be printed. It is written this way so that we can use
+    the same code with decks other than the 52 standard cards.
+    """
+    rank, suit = divmod(i, len(SUITS))
+    return rank, SUITS[suit]
+
+
+@trap
 def run_sim(n:int) -> None:
     """
-    Run a simulation n times.
+    Deal n times.
     """
-    global myargs
+    global myargs, DECK, logger
 
-    pidprint(f"Running {n} simulations.")
-    
-    for i in range(n):
-        start=time.time()
-        if myargs.independent:
-            deals = tuple(random.sample(deck, 10) for i in range(myargs.size + 1))
-        else:
-            pairs = tuple(random.sample(deck, 20) for i in range((myargs.size + 1)/2))
-            pidprint(f"{len(pairs)=}")
-            lefts = tuple(pair[:10] for pair in pairs)
-            rights = tuple(pair[10:] for pair in pairs)
-            deals = lefts + rights
-                
-        pidprint(f"Dealt {myargs.size} hands in {time.time()-start} seconds.")
+    logger.debug(f"Dealing {n} hands.")
 
-        triplet_fraction()
+    deals = tuple(hand for hand in a_deal() for i in range(n//2)) 
+
+    logger.debug(f"Dealt {n} hands.")
+
+    triplet_fraction(deals)
+    sequence_fraction(deals)
+
+
+@trap
+def sequence_fraction(deals:tuple) -> None:
+    global result_file, DECK, logger
+
+    start=time.time()
+    sequences = 0
+    for cards in deals:
+
+        # Whatever the two highest cards are, they cannot be
+        # the base of a sequence of three cards in ascending value.
+        for i in sorted(cards[:-2]):
+            if i+4 in cards and i+8 in cards:
+                sequences += 1
+                continue
+        
+    logger.debug(f"Found {sequences} hands with a 3-card sequence.")
+    # write_results(f"sequence,{sequences},{len(deals)-sequences}\n")
 
 
 def splitter(group:Iterable, num_chunks:int) -> Iterable:
@@ -136,7 +148,6 @@ def splitter(group:Iterable, num_chunks:int) -> Iterable:
             ... do something with chunk ...
 
     """
-
     quotient, remainder = divmod(len(group), num_chunks)
     is_dict = isinstance(group, dict)
     if is_dict: 
@@ -152,39 +163,40 @@ def splitter(group:Iterable, num_chunks:int) -> Iterable:
             yield group[lower:upper]
 
 
-def triplet_fraction() -> None:
+@trap
+def triplet_fraction(deals:tuple) -> None:
 
-    global deals, result_file
+    global result_file, DECK, logger
 
     start=time.time()
     triplets = 0
     for deal in deals:
-        ranks = Counter(card.rank for card in deal)
-        if any(_ > 2 for _ in ranks.values()): triplets += 1
+        if any(len(rank) > 2 for rank in bucketize(deal, 4)): triplets += 1
 
-    pidprint(f"Found {triplets} triplets in {time.time()-start} seconds.")
+    logger.debug(f"Found {triplets} triplets in {time.time()-start} seconds.")
     
-    write_results(f"triplet,{triplets},{len(deals)-triplets}\n")
+    # write_results(f"triplet,{triplets},{len(deals)-triplets}\n")
 
-
+@trap
 def write_results(s:str) -> None:
     """
     Write one line of a CSV file to be used for later analysis,
     perhaps in pandas.
     """
 
-    global results_file
+    global result_file
 
     try:
-        fcntl.lockf(results_file, fcntl.LOCK_EX)
-        results_file.write(s)
+        fcntl.lockf(result_file.fileno(), fcntl.LOCK_EX)
+        result_file.write(s)
     finally:
-        fcntl.lockf(results_file, fcntl.LOCK_UN)
+        fcntl.lockf(result_file.fileno(), fcntl.LOCK_UN)
 
 
+@trap
 def ginsim_main(myargs:argparse.Namespace) -> int:
 
-    global deck, deals, num_cores
+    global DECK, deals, num_cores, logger, result_file
 
     
     result_file = tempfile.NamedTemporaryFile('w+')
@@ -192,28 +204,28 @@ def ginsim_main(myargs:argparse.Namespace) -> int:
     ###
     # Work out the multiprocessing parameters.
     ###
-    num_processes = min(myargs.num_evals, num_cores*myargs.saturation)
-    pidprint(f"{num_processes=} {num_cores=}")
+    num_processes = min(myargs.num_procs, num_cores*myargs.saturation)
+    logger.debug(f"Beginning with {num_processes=}, {num_cores=}")
     pids = set()
     
     # Cut the work into suitable size pieces, and let the kids 
     # go to work.
-    for chunk in splitter(tuple(range(myargs.num_evals)), num_processes):
+    for j in range(num_processes):
+        
         pid = os.fork()
         if pid: 
             pids.add(pid)
             continue
 
-        else:
-            try:
-                run_sim(len(chunk))
-            finally:
-                os._exit(os.EX_OK)
+        try:
+            run_sim(myargs.size//num_processes)
+        finally:
+            os._exit(os.EX_OK)
             
     while pids:
         pid, status, resources = os.wait3(0)
         pids.remove(pid)
-        sys.stderr.write(f"Child {pid} finished.")
+        sys.stderr.write(f"Child {pid} finished.\n")
 
     result_file.seek(0)
     print(result_file.readlines())
@@ -227,12 +239,9 @@ if __name__ == '__main__':
         description="What ginsim does, ginsim does best.")
 
 
-    parser.add_argument('-i', '--independent', action='store_true',
-        help="Assume (falsely) that the two players' hands are indepentent of each other.")
-
-    parser.add_argument('-n', '--num-evals', type=int, default=1,
-        choices=(1, num_cores),
-        help="Number of times to run the simulation.")
+    parser.add_argument('-n', '--num-procs', type=int, default=1,
+        choices=range(1, num_cores+1),
+        help="Number of processes for the simulation.")
 
     parser.add_argument('-o', '--output', type=str, default="",
         help="Output file name")
@@ -240,13 +249,17 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--saturation', type=float, default=1.0,
         help="Fraction of the available cores to use. Default is 1.0")
 
-    parser.add_argument('-v', '--verbose', action='store_true',
-        help="Print a running narrative.")
-
     parser.add_argument('-z', '--size', type=int, default=100000,
         help="Number of hands to deal.")
 
     myargs = parser.parse_args()
+
+    try:
+        os.unlink('ginsim.log')
+    except:
+        pass
+
+    logger=URLogger(logfile='ginsim.log', level=logging.DEBUG)
 
     try:
         outfile = sys.stdout if not myargs.output else open(myargs.output, 'w')
